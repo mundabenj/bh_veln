@@ -534,8 +534,9 @@ def harmonise(dataset, overwrite=False):
     for pid in pids:
         out_dir = participant_dir(dataset, pid)
         cached = os.path.exists(os.path.join(out_dir, "labels.parquet")) and not overwrite
-        if cached:
-            rec = load_harmonised(dataset, pid)
+        if cached:  # only labels are needed for the summary; signals are just checked for existence
+            rec = load_harmonised(dataset, pid, ["labels"])
+            rec.update({s: None for s in SIGNAL_SPEC if os.path.exists(os.path.join(out_dir, f"{s}.parquet"))})
             notes = [old_notes[pid]] if old_notes.get(pid) else []
         else:
             rec, notes = build(pid)
@@ -633,11 +634,13 @@ def write_data_card(dataset, table, phase_hours):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd")  # no subcommand (e.g. VS Code's Run button) -> harmonise all
     h = sub.add_parser("harmonise", help="build harmonised Parquet files and data cards")
     h.add_argument("datasets", nargs="*", help=f"any of {DATASETS} (default: all)")
     h.add_argument("--overwrite", action="store_true", help="rebuild participants that already exist")
     args = ap.parse_args()
+    if args.cmd is None:
+        args = ap.parse_args(["harmonise"])
     unknown = set(args.datasets) - set(DATASETS)
     if unknown:
         ap.error(f"unknown dataset(s): {sorted(unknown)}; choose from {DATASETS}")
