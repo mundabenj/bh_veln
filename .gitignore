@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.ipynb_checkpoints/
+
+# Data: raw and harmonised datasets are never committed (Protocol section 8)
+Datasets/
+harmonised/
+*.parquet
+*.pkl
+*.zip
+*.csv
+*.xlsx
+
+# Editor
+.vscode/
