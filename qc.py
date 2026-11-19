@@ -36,9 +36,10 @@ RULE_SETS = {
     # Kleckner et al. (2018) EDA rules, plus a 30-200 bpm plausibility range for inter-beat intervals.
     "kleckner": dict(eda_min=0.05, eda_max=60.0, eda_slope=10.0, temp_min=30.0, temp_max=40.0,
                      ibi_min=0.3, ibi_max=2.0, ibi_change=None, buffer_s=5),
-    # Kleckner plus a successive-IBI change limit (20%, Malik-style ectopic/artifact rule).
-    "strict": dict(eda_min=0.05, eda_max=60.0, eda_slope=10.0, temp_min=30.0, temp_max=40.0,
-                   ibi_min=0.3, ibi_max=2.0, ibi_change=0.20, buffer_s=5),
+    # Kleckner EDA range, slope limit and buffer, but temperature used only to detect non-wear
+    # (below 25 °C; no upper limit), keeping the 30-200 bpm IBI range.
+    "kleckner_mod": dict(eda_min=0.05, eda_max=60.0, eda_slope=10.0, temp_min=25.0, temp_max=None,
+                         ibi_min=0.3, ibi_max=2.0, ibi_change=None, buffer_s=5),
 }
 # Wrist ENMO above 100 mg ~ moderate-to-vigorous activity (Hildebrand et al., 2014), averaged over 5 s.
 ACC_ENMO_HIGH = 0.1
@@ -150,7 +151,10 @@ def qc_participant(dataset, pid):
         eda_bad = (eda < r["eda_min"]) | (eda > r["eda_max"]) | np.isnan(eda)
         if r["eda_slope"]:
             eda_bad |= slope > r["eda_slope"]
-        temp_bad = ((temp < r["temp_min"]) | (temp > r["temp_max"])) & ~np.isnan(temp)
+        temp_bad = temp < r["temp_min"]
+        if r["temp_max"] is not None:
+            temp_bad |= temp > r["temp_max"]
+        temp_bad &= ~np.isnan(temp)
         # Kleckner: an out-of-range temperature means the sensor is off the wrist, so EDA is invalid too.
         eda_bad = _dilate(eda_bad | temp_bad, buf)
         temp_bad = _dilate(temp_bad | np.isnan(temp), buf)
@@ -170,6 +174,10 @@ def qc_participant(dataset, pid):
 # ---------------------------------------------------------------------------
 def _pct(x):
     return f"{100 * x:.1f}%"
+
+
+def _range(lo, hi):
+    return f"≥{lo}" if hi is None else f"{lo}–{hi}"
 
 
 def summarise(dataset, pid, qc, lab):
@@ -203,7 +211,7 @@ def write_report(summary):
           "|---|---|---|---|---|---|---|"]
     for name, r in RULE_SETS.items():
         md.append(f"| {name} | {r['eda_min']}–{r['eda_max']} | {r['eda_slope'] or '–'} | "
-                  f"{r['temp_min']}–{r['temp_max']} | {r['ibi_min']}–{r['ibi_max']} | "
+                  f"{_range(r['temp_min'], r['temp_max'])} | {r['ibi_min']}–{r['ibi_max']} | "
                   f"{_pct(r['ibi_change']) if r['ibi_change'] else '–'} | {r['buffer_s']} |")
     md += ["", f"Accelerometer flag: 5-s mean wrist ENMO > {ACC_ENMO_HIGH * 1000:.0f} mg.", ""]
 
@@ -258,9 +266,12 @@ def run(datasets, overwrite=False):
         print(f"=== {ds}")
         for pid in so.list_harmonised(ds):
             path = os.path.join(so.participant_dir(ds, pid), "qc.parquet")
+            qc = None
             if os.path.exists(path) and not overwrite:
                 qc = pd.read_parquet(path)
-            else:
+                if any(f"{name}_ok" not in qc for name in RULE_SETS):
+                    qc = None   # cached before a rule set was added or renamed: recompute
+            if qc is None:
                 qc = qc_participant(ds, pid)
                 qc.to_parquet(path)
             lab = so.load_harmonised(ds, pid, ["labels"])["labels"]
